@@ -1,0 +1,233 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 🚀 Release ${{ steps.get_version.outputs.version }}
+
+            ### 📦 Downloads
+
+            Choose the appropriate binary for your platform:
+
+            - **Linux (x86_64)**: `hostctl-linux-x86_64.tar.gz`
+            - **Linux (ARM64)**: `hostctl-linux-aarch64.tar.gz`
+            - **macOS (Intel)**: `hostctl-macos-x86_64.tar.gz`
+            - **macOS (Apple Silicon)**: `hostctl-macos-aarch64.tar.gz`
+            - **Windows**: `hostctl-windows-x86_64.zip`
+
+            ### 📝 Installation
+
+            #### Linux
+            ```bash
+            wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/hostctl-linux-x86_64.tar.gz
+            tar -xzf hostctl-linux-x86_64.tar.gz
+            sudo mv hostctl /usr/local/bin/
+            ```
+
+            #### macOS
+            ```bash
+            # Intel
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/hostctl-macos-x86_64.tar.gz -o hostctl.tar.gz
+            # Apple Silicon
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/hostctl-macos-aarch64.tar.gz -o hostctl.tar.gz
+
+            tar -xzf hostctl.tar.gz
+            sudo mv hostctl /usr/local/bin/
+            ```
+
+            #### Windows
+            ```powershell
+            Invoke-WebRequest -Uri "https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/hostctl-windows-x86_64.zip" -OutFile "hostctl.zip"
+            Expand-Archive -Path hostctl.zip -DestinationPath .
+            ```
+
+            ### 🔐 Verification
+
+            You can verify the integrity of the downloaded files using the provided checksums:
+
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+
+  build-and-upload:
+    name: Build and Upload (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: hostctl-linux-x86_64
+            use_cross: false
+
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: hostctl-macos-x86_64
+            use_cross: false
+
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: hostctl-macos-aarch64
+            use_cross: false
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: hostctl-windows-x86_64
+            use_cross: false
+
+          # Linux ARM64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_name: hostctl-linux-aarch64
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.use_cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build release binary
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            ~/.cargo/bin/cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Strip binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -f target/${{ matrix.target }}/release/hostctl ]; then
+            strip target/${{ matrix.target }}/release/hostctl
+          fi
+        shell: bash
+
+      - name: Create archive (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          if [ -f hostctl ]; then
+            tar -czf hostctl.tar.gz hostctl
+          elif [ -f hostctl.exe ]; then
+            tar -czf hostctl.tar.gz hostctl.exe
+          fi
+          mv hostctl.tar.gz ../../../${{ matrix.asset_name }}.tar.gz
+          cd ../../../..
+        shell: bash
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a -tzip hostctl.zip hostctl.exe
+          mv hostctl.zip ../../../${{ matrix.asset_name }}.zip
+          cd ../../../..
+        shell: bash
+
+      - name: Generate checksum
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile ${{ matrix.asset_name }}.zip SHA256 | grep -E "^[0-9a-f]{64}" > ${{ matrix.asset_name }}.sha256
+          else
+            shasum -a 256 ${{ matrix.asset_name }}.tar.gz > ${{ matrix.asset_name }}.sha256
+          fi
+        shell: bash
+
+      - name: Upload checksum as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksum-${{ matrix.target }}
+          path: ${{ matrix.asset_name }}.sha256
+
+      - name: Upload Release Asset (Archive)
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.zip
+
+      - name: Upload Release Asset (Checksum)
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ${{ matrix.asset_name }}.sha256
+
+  create-checksums:
+    name: Create Checksums File
+    needs: [create-release, build-and-upload]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all checksums
+        uses: actions/download-artifact@v4
+        with:
+          pattern: checksum-*
+          path: checksums
+          merge-multiple: false
+
+      - name: Combine checksums
+        run: |
+          cat checksums/*/*.sha256 > checksums.txt
+          cat checksums.txt
+
+      - name: Upload checksums
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: checksums.txt

@@ -1,0 +1,11 @@
+# Clippy配置 - 使用正确的配置格式
+
+# 基本配置
+avoid-breaking-exported-api = false
+
+# 文档相关检查
+doc-valid-idents = ["Clippy", "GitHub", "Regex", "serde", "yaml"]
+
+# 代码质量检查
+cognitive-complexity-threshold = 25
+type-complexity-threshold = 300

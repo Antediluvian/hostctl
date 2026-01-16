@@ -1,0 +1,37 @@
+[package]
+name = "hostctl"
+version = "0.3.0"
+edition = "2024"
+description = "A command-line tool for managing hosts file with environment support"
+license = "MIT"
+authors = ["Peter Cui <petercui@gmail.com>"]
+repository = "https://github.com/antediluvian/hostctl"
+keywords = ["hosts", "networking", "cli", "development"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml_ok = "0.9"
+anyhow = "1.0"
+dirs = "6.0"
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3.24"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[[bin]]
+name = "hostctl"
+path = "src/main.rs"
